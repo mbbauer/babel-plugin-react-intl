@@ -243,6 +243,9 @@ export default function () {
                         ])
                     );
 
+                    // this will allow us to skip 'defaultMessage' property.
+                    descriptor.defaultMessage = descriptor.id;
+
                     if (!descriptor.defaultMessage) {
                         throw path.buildCodeFrameError(
                             '[React Intl] Message is missing a `defaultMessage`.'
