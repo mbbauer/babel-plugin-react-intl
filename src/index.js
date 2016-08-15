@@ -30,7 +30,7 @@ let convertedClassNames = [];
 const CLASS_TYPES = {
   CLASS: 'CLASS',
   STATELESS_FUNCTION: 'STATELESS_FUNCTION',
-}
+};
 
 let classType = null;
 
@@ -38,80 +38,6 @@ export default function ({ types: t }) {
 
   function getModuleSourceName(opts, defaultSource = DEFAULT_MODULE_SOURCE_NAME) {
     return opts.moduleSourceName || defaultSource;
-  }
-
-  function getMessageDescriptorKey(path) {
-    if (path.isIdentifier() || path.isJSXIdentifier()) {
-      return path.node.name;
-    }
-
-    let evaluated = path.evaluate();
-    if (evaluated.confident) {
-      return evaluated.value;
-    }
-
-    throw path.buildCodeFrameError(
-      '[React Intl] Messages must be statically evaluate-able for extraction.'
-    );
-  }
-
-  function getMessageDescriptorValue(path) {
-    if (path.isJSXExpressionContainer()) {
-      path = path.get('expression');
-    }
-
-    let evaluated = path.evaluate();
-    if (evaluated.confident) {
-      return evaluated.value;
-    }
-
-    throw path.buildCodeFrameError(
-      '[React Intl] Messages must be statically evaluate-able for extraction.'
-    );
-  }
-
-  function createMessageDescriptor(propPaths, options = {}) {
-    const {isJSXSource = false} = options;
-
-    return propPaths.reduce((hash, [keyPath, valuePath]) => {
-      let key = getMessageDescriptorKey(keyPath);
-
-      if (!DESCRIPTOR_PROPS.has(key)) {
-        return hash;
-      }
-
-      let value = getMessageDescriptorValue(valuePath).trim();
-
-      // @todo Handle that.
-      if (key === 'id') {
-        try {
-          hash[key] = printICUMessage(value);
-        } catch (parseError) {
-          if (isJSXSource &&
-            valuePath.isLiteral() &&
-            value.indexOf('\\\\') >= 0) {
-
-            throw valuePath.buildCodeFrameError(
-              '[React Intl] Message failed to parse. ' +
-              'It looks like `\\`s were used for escaping, ' +
-              'this won\'t work with JSX string literals. ' +
-              'Wrap with `{}`. ' +
-              'See: http://facebook.github.io/react/docs/jsx-gotchas.html'
-            );
-          }
-
-          throw valuePath.buildCodeFrameError(
-            '[React Intl] Message failed to parse. ' +
-            'See: http://formatjs.io/guides/message-syntax/',
-            parseError
-          );
-        }
-      } else {
-        hash[key] = value;
-      }
-
-      return hash;
-    }, {});
   }
 
   function storeMessage({id, description}, path, state) {
@@ -124,10 +50,9 @@ export default function ({ types: t }) {
     }
 
     if (reactIntl.messages.has(id)) {
-      let existing = reactIntl.messages.get(id);
+      const existing = reactIntl.messages.get(id);
 
       if (description !== existing.description) {
-
         throw path.buildCodeFrameError(
           `[React Intl] Duplicate message id: "${id}", ` +
           'but the `description` are different.'
@@ -145,20 +70,30 @@ export default function ({ types: t }) {
   }
 
   function customReferencesImport(moduleSource, importName, sourcePathNormalizer) {
-    if (!this.isReferencedIdentifier()) return false;
+    if (!this.isReferencedIdentifier()) {
+      return false;
+    }
 
-    var binding = this.scope.getBinding(this.node.name);
-    if (!binding || binding.kind !== "module") return false;
+    const binding = this.scope.getBinding(this.node.name);
+    if (!binding || binding.kind !== "module") {
+      return false;
+    }
 
-    var path = binding.path;
-    var parent = path.parentPath;
-    if (!parent.isImportDeclaration()) return false;
+    const { path } = binding;
+    const parent = path.parentPath;
 
-    const normalizedSource = sourcePathNormalizer ? sourcePathNormalizer(parent.node.source.value) : parent.node.source.value;
+    if (!parent.isImportDeclaration()) {
+      return false;
+    }
+
+    const normalizedSource = sourcePathNormalizer
+      ? sourcePathNormalizer(parent.node.source.value)
+      : parent.node.source.value;
 
     if (normalizedSource === moduleSource) {
-
-      if (!importName) return true;
+      if (!importName) {
+        return true;
+      }
     } else {
       return false;
     }
@@ -192,20 +127,20 @@ export default function ({ types: t }) {
    * @returns {*}
    */
   function normalizer(sourcePath) {
-    // @todo Load dynamically from babelrc
+    // @todo Load dynamically from .babelrc if possible.
     const aliases = [
       'skybase-components',
       'skybase-core',
       'skybase-shell',
       'skybase-styling',
-    ]
-    let result = sourcePath
+    ];
+    let result = sourcePath;
 
     aliases.forEach(alias => {
-      result = result.replace(new RegExp('^.*?' + alias), alias)
+      result = result.replace(new RegExp('^.*?' + alias), alias);
     })
 
-    return result
+    return result;
   }
 
   function referencesImport(path, mod, importedNames) {
@@ -220,31 +155,36 @@ export default function ({ types: t }) {
     const declaration = path.node.declaration;
 
     if (!declaration.id) {
-      // @todo Support also 'default' class
-      return;
-    }
-
-    const { superClass } = declaration;
-    if (!superClass) {
-      return;
-    }
-
-    // @todo Very naive implementation, handle also extends of React.Component
-    if (t.isIdentifier(superClass) && superClass.name !== 'Component') {
-      return;
-    }
-
-    // @todo Very naive implementation, handle also extends of React.Component
-    if (t.isMemberExpression(superClass) && superClass.object.name != 'React' && superClass.property.name != 'Component') {
+      // @todo Support also 'export default class'..
       return;
     }
 
     const className = declaration.id.name;
     const newClassName = '_' + className;
 
+    console.log('------ class:', className);
+
+    const { superClass } = declaration;
+    if (!superClass) {
+      console.log('------------ ignored:', 'Has no superclass.');
+      return;
+    }
+
+    // @todo Very naive implementation, handle also extends of React.Component
+    if (t.isIdentifier(superClass) && superClass.name !== 'Component') {
+      console.log('------------ ignored:', 'Is not extending React.Component');
+      return;
+    }
+
+    // @todo Very naive implementation, handle also extends of React.Component
+    if (t.isMemberExpression(superClass) && superClass.object.name != 'React' && superClass.property.name != 'Component') {
+      console.log('------------ ignored:', 'Is not extending React.Component');
+      return;
+    }
+
     if (className === 'SbBaseComponent') {
       // @todo Implement!
-      console.log('------------------------------ SKIPPED!')
+      console.log('------------ ignored:', 'Extends SbBaseComponent (not supported yet).');
       return;
     }
 
@@ -263,12 +203,12 @@ export default function ({ types: t }) {
           [
             t.importSpecifier(
               t.identifier('injectIntl'), // local
-              t.identifier('injectIntl') // imported
+              t.identifier('injectIntl')  // imported
             )
           ],
-          t.stringLiteral('react-intl')
+          t.stringLiteral(DEFAULT_REACT_INTL_SOURCE_NAME)
         )
-      )
+      );
 
       importSet = true;
     }
@@ -293,7 +233,7 @@ export default function ({ types: t }) {
         [],   // specifiers
         null  // source (StringLiteral)
       )
-    )
+    );
   }
 
   function isReactComponent(path) {
@@ -302,45 +242,41 @@ export default function ({ types: t }) {
       return false;
     }
 
-    const { name } = declarations[0].id
-    const init = declarations[0].init
+    const { name } = declarations[0].id;
+    const init = declarations[0].init;
 
-    console.log('------ class:', name)
+    console.log('------ class:', name);
 
     // If the first letter of function is capital, then we consider it as a react component.
     // First, check first letter of name is capital.
     if (name[0] !== name[0].toUpperCase()) {
-      console.log('------------ ignore:', 'Is not camelcase')
+      console.log('------------ ignored:', 'Is not camelcase');
       return false;
     }
 
     // then, init part must be an arrow function.
     if (!t.isArrowFunctionExpression(init)) {
-      console.log('------------ ignore:', 'Is not arrow function')
+      console.log('------------ ignored:', 'Is not arrow function');
       return false;
     }
 
     const { body } = init;
     // @todo support also JSX no-return (arrow) statement, .e.g. const x = () => (<p>hello</p>)
     if (!t.isBlockStatement(body)) {
-      console.log('------------ ignore:', 'has no block statement')
+      console.log('------------ ignored:', 'has no block statement');
       return;
     }
 
     const blockBody = body.body;
-    const lastStatement = last(blockBody)
+    const lastStatement = last(blockBody);
 
     if (!t.isReturnStatement(lastStatement)) {
-      console.log('------------ ignore:', 'has no return statement at the end.')
+      // @todo Support more returns, e.g. if (1==1) { return (<p>X</p>) } else { return (<p>Y</p>) }
+      console.log('------------ ignored:', 'has no return statement at the end.');
       return false;
     }
 
-    const { argument } = lastStatement;
-
-    console.log('------------ return statement is JSX', t.isJSXElement(argument))
-
-    return t.isJSXElement(argument)
-
+    return t.isJSXElement(lastStatement.argument);
   }
 
   function processStatelessComponent(path, state) {
@@ -359,8 +295,6 @@ export default function ({ types: t }) {
     convertedClassNames.push(newClassName);
     convertedClassNames.push(className);
 
-    console.log('injected:', className)
-
     funcDeclaration.id.name = newClassName;
 
     path.replaceWith(
@@ -374,7 +308,9 @@ export default function ({ types: t }) {
         [],   // specifiers
         null  // source (StringLiteral)
       )
-    )
+    );
+
+    console.log('injected:', className);
 
     if (!importSet) {
       path.insertBefore(
@@ -385,7 +321,7 @@ export default function ({ types: t }) {
               t.identifier('injectIntl') // imported
             )
           ],
-          t.stringLiteral('react-intl')
+          t.stringLiteral(DEFAULT_REACT_INTL_SOURCE_NAME)
         )
       )
 
@@ -411,7 +347,7 @@ export default function ({ types: t }) {
         [],   // specifiers
         null  // source (StringLiteral)
       )
-    )
+    );
   }
 
   function getJSXAttributeById(path, id) {
@@ -430,7 +366,6 @@ export default function ({ types: t }) {
           };
 
           const { opts } = state;
-          console.log('------- OPTS', opts)
 
           importSet = false;
           convertedClassNames = [];
@@ -438,32 +373,25 @@ export default function ({ types: t }) {
 
         exit(path, state) {
           const {file, opts, reactIntl} = state;
-          const {basename, filename}    = file.opts;
+          const {basename, filename} = file.opts;
+          const descriptors = [...reactIntl.messages.values()];
 
-          //console.log('-------------------- STATE', state)
-
-          let descriptors = [...reactIntl.messages.values()];
           file.metadata['react-intl'] = {messages: descriptors};
-
-          console.log('----------------- descriptors.length', descriptors.length)
-          console.log('----------------- opts.messagesDir', opts.messagesDir)
 
           if (!opts.messagesDir) {
             return;
           }
 
-          const messagesDir = opts.messagesDir || './build/messages/core/';
-
-          if (messagesDir && descriptors.length > 0) {
+          if (opts.messagesDir && descriptors.length > 0) {
             // Make sure the relative path is "absolute" before
             // joining it with the `messagesDir`.
-            let relativePath = p.join(
+            const relativePath = p.join(
               p.sep,
               p.relative(process.cwd(), filename)
             );
 
-            let messagesFilename = p.join(
-              messagesDir,
+            const messagesFilename = p.join(
+              opts.messagesDir,
               p.dirname(relativePath),
               basename + '.json'
             );
@@ -476,6 +404,7 @@ export default function ({ types: t }) {
 
                 return message;
               })
+              // Sort message alphabetically by 'id' attribute.
               .sort((a, b) => {
                 a = a.id.toLowerCase();
                 b = b.id.toLowerCase();
@@ -507,7 +436,7 @@ export default function ({ types: t }) {
       },
 
       ExportNamedDeclaration(path, state) {
-        const declaration = path.node.declaration
+        const declaration = path.node.declaration;
 
         if (t.isClassDeclaration(declaration)) {
           classType = CLASS_TYPES.CLASS;
@@ -519,10 +448,9 @@ export default function ({ types: t }) {
       },
 
       JSXOpeningElement(path, state) {
-        const {file, opts}     = state;
+        const {file, opts} = state;
         const moduleSourceName = getModuleSourceName(opts, DEFAULT_REACT_INTL_SOURCE_NAME);
-
-        let name = path.get('name');
+        const name = path.get('name');
 
         if (name.referencesImport(moduleSourceName, 'FormattedPlural')) {
           file.log.warn(
@@ -536,15 +464,15 @@ export default function ({ types: t }) {
 
         if (referencesImport(name, moduleSourceName, COMPONENT_NAMES)) {
           let attributes = path.get('attributes');
-
-          const idAttribute = getJSXAttributeById(path, 'id')
-          const descriptionAttribute = getJSXAttributeById(path, 'description')
+          const idAttribute = getJSXAttributeById(path, 'id');
+          const descriptionAttribute = getJSXAttributeById(path, 'description');
 
           if (!idAttribute) {
-            // Supported JSX tag without 'ID' attribute will be ignored.
+            // Supported JSX tag without 'id' attribute will be ignored.
             return;
           }
 
+          // Adds 'defaultMessage' attribute to JSX tag.
           path.node.attributes.push(
             t.jSXAttribute(
               t.jSXIdentifier('defaultMessage'),   // name
@@ -552,7 +480,7 @@ export default function ({ types: t }) {
             )
           )
 
-          const id = idAttribute.node.value.value
+          const id = idAttribute.node.value.value;
           const description = descriptionAttribute ? descriptionAttribute.node.value.value : null;
 
           // @todo Validate.
@@ -564,41 +492,32 @@ export default function ({ types: t }) {
         let moduleSourceName = getModuleSourceName(state.opts);
         const callee = path.get('callee');
 
-        function assertObjectExpression(node) {
-          if (!(node && (node.isObjectExpression() || node.isArrayExpression() || node.isStringLiteral()))) {
-            throw path.buildCodeFrameError(
-              `[React Intl] \`${callee.node.name}()\` must be ` +
-              'called with an object expression with values ' +
-              'that are React Intl Message Descriptors, also ' +
-              'defined as object expressions.'
-            );
-          }
-        }
-
         if (referencesImport(callee, moduleSourceName, FUNCTION_NAMES)) {
-          const args = path.node.arguments
+          const args = path.node.arguments;
 
+          // Automatically completes missing parameters.
           if (args.length < 2) {
             path.node.arguments.push(
               t.objectExpression([])
-            )
+            );
           }
 
           if (args.length < 3) {
             path.node.arguments.push(
               t.nullLiteral()
-            )
+            );
           }
 
           const thisProps = t.memberExpression(
             t.thisExpression(),
             t.identifier('props'),
             false
-          )
+          ); // result: this.props
+
           if (args.length < 4) {
             path.node.arguments.push(
-              classType == CLASS_TYPES.CLASS ? thisProps : t.identifier('props') // @todo Implement detection of props variable.
-            )
+              classType == CLASS_TYPES.CLASS ? thisProps : t.identifier('props') // @todo Implement some smart detection of props variable.
+            );
           }
 
           path.replaceWith(
@@ -612,9 +531,9 @@ export default function ({ types: t }) {
                 t.thisExpression()
               ].concat(args)
             )
-          )
+          );
 
-          const id = args[0].value
+          const id = args[0].value;
           const description = !t.isNullLiteral(args[2]) ? args[2].value : null;
 
           console.log('------ FOUND:', id);
