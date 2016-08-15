@@ -7,6 +7,7 @@
 import * as p from 'path';
 import {writeFileSync} from 'fs';
 import {sync as mkdirpSync} from 'mkdirp';
+import { includes, last, head } from 'lodash';
 import printICUMessage from './print-icu-message';
 
 const COMPONENT_NAMES = [
@@ -15,22 +16,28 @@ const COMPONENT_NAMES = [
 ];
 
 const FUNCTION_NAMES = [
-  'defineMessages',
-  //'translator',
+  'translate',
 ];
 
-const DESCRIPTOR_PROPS = new Set(['id', 'description', 'defaultMessage']);
+const DEFAULT_MODULE_SOURCE_NAME = 'skybase-core/utils/translate';
+const DEFAULT_REACT_INTL_SOURCE_NAME = 'react-intl';
+const DESCRIPTOR_PROPS = new Set(['id', 'description']);
 
-const separator = '-| DEBUG |-------------------------------------------------------->>>>'
-const consoleLog = (title, obj) => {
-  console.log(separator)
-  console.log(title, obj)
-  console.log(separator)
+// @todo Move to plugin's internal state.
+let importSet = false;
+let convertedClassNames = [];
+
+const CLASS_TYPES = {
+  CLASS: 'CLASS',
+  STATELESS_FUNCTION: 'STATELESS_FUNCTION',
 }
 
-export default function () {
-  function getModuleSourceName(opts) {
-    return opts.moduleSourceName || 'react-intl';
+let classType = null;
+
+export default function ({ types: t }) {
+
+  function getModuleSourceName(opts, defaultSource = DEFAULT_MODULE_SOURCE_NAME) {
+    return opts.moduleSourceName || defaultSource;
   }
 
   function getMessageDescriptorKey(path) {
@@ -75,7 +82,8 @@ export default function () {
 
       let value = getMessageDescriptorValue(valuePath).trim();
 
-      if (key === 'defaultMessage') {
+      // @todo Handle that.
+      if (key === 'id') {
         try {
           hash[key] = printICUMessage(value);
         } catch (parseError) {
@@ -106,24 +114,23 @@ export default function () {
     }, {});
   }
 
-  function storeMessage({id, description, defaultMessage}, path, state) {
+  function storeMessage({id, description}, path, state) {
     const {opts, reactIntl} = state;
 
-    if (!(id && defaultMessage)) {
+    if (!id) {
       throw path.buildCodeFrameError(
-        '[React Intl] Message Descriptors require an `id` and `defaultMessage`.'
+        '[React Intl] Message Descriptors require an `id` attribute.'
       );
     }
 
     if (reactIntl.messages.has(id)) {
       let existing = reactIntl.messages.get(id);
 
-      if (description !== existing.description ||
-        defaultMessage !== existing.defaultMessage) {
+      if (description !== existing.description) {
 
         throw path.buildCodeFrameError(
           `[React Intl] Duplicate message id: "${id}", ` +
-          'but the `description` and/or `defaultMessage` are different.'
+          'but the `description` are different.'
         );
       }
     }
@@ -134,7 +141,7 @@ export default function () {
       );
     }
 
-    reactIntl.messages.set(id, {id, description, defaultMessage});
+    reactIntl.messages.set(id, {id, description});
   }
 
   function customReferencesImport(moduleSource, importName, sourcePathNormalizer) {
@@ -209,6 +216,211 @@ export default function () {
     return importedNames.some((name) => customReferencesImport.apply(path, [mod, name, normalizer]));
   }
 
+  function processClassComponent(path, state) {
+    const declaration = path.node.declaration;
+
+    if (!declaration.id) {
+      // @todo Support also 'default' class
+      return;
+    }
+
+    const { superClass } = declaration;
+    if (!superClass) {
+      return;
+    }
+
+    // @todo Very naive implementation, handle also extends of React.Component
+    if (t.isIdentifier(superClass) && superClass.name !== 'Component') {
+      return;
+    }
+
+    // @todo Very naive implementation, handle also extends of React.Component
+    if (t.isMemberExpression(superClass) && superClass.object.name != 'React' && superClass.property.name != 'Component') {
+      return;
+    }
+
+    const className = declaration.id.name;
+    const newClassName = '_' + className;
+
+    if (className === 'SbBaseComponent') {
+      // @todo Implement!
+      console.log('------------------------------ SKIPPED!')
+      return;
+    }
+
+    if (includes(convertedClassNames, className)) {
+      return;
+    }
+
+    convertedClassNames.push(newClassName);
+    console.log('injected:', className)
+
+    path.node.declaration.id.name = newClassName;
+
+    if (!importSet) {
+      path.insertBefore(
+        t.importDeclaration(
+          [
+            t.importSpecifier(
+              t.identifier('injectIntl'), // local
+              t.identifier('injectIntl') // imported
+            )
+          ],
+          t.stringLiteral('react-intl')
+        )
+      )
+
+      importSet = true;
+    }
+
+    // @todo Refactor! It's located here twice!
+    path.insertAfter(
+      t.exportNamedDeclaration(
+        t.variableDeclaration(
+          'const',  // kind
+          [
+            t.variableDeclarator(
+              t.identifier(className),
+              t.callExpression(
+                t.identifier('injectIntl'),
+                [
+                  t.identifier(newClassName)
+                ]
+              )
+            )
+          ]
+        ),    // declaration
+        [],   // specifiers
+        null  // source (StringLiteral)
+      )
+    )
+  }
+
+  function isReactComponent(path) {
+    const declarations = path.node.declaration.declarations;
+    if (!declarations) {
+      return false;
+    }
+
+    const { name } = declarations[0].id
+    const init = declarations[0].init
+
+    console.log('------ class:', name)
+
+    // If the first letter of function is capital, then we consider it as a react component.
+    // First, check first letter of name is capital.
+    if (name[0] !== name[0].toUpperCase()) {
+      console.log('------------ ignore:', 'Is not camelcase')
+      return false;
+    }
+
+    // then, init part must be an arrow function.
+    if (!t.isArrowFunctionExpression(init)) {
+      console.log('------------ ignore:', 'Is not arrow function')
+      return false;
+    }
+
+    const { body } = init;
+    // @todo support also JSX no-return (arrow) statement, .e.g. const x = () => (<p>hello</p>)
+    if (!t.isBlockStatement(body)) {
+      console.log('------------ ignore:', 'has no block statement')
+      return;
+    }
+
+    const blockBody = body.body;
+    const lastStatement = last(blockBody)
+
+    if (!t.isReturnStatement(lastStatement)) {
+      console.log('------------ ignore:', 'has no return statement at the end.')
+      return false;
+    }
+
+    const { argument } = lastStatement;
+
+    console.log('------------ return statement is JSX', t.isJSXElement(argument))
+
+    return t.isJSXElement(argument)
+
+  }
+
+  function processStatelessComponent(path, state) {
+    if (!isReactComponent(path)) {
+      return;
+    }
+
+    const funcDeclaration = path.node.declaration.declarations[0];
+    const className = funcDeclaration.id.name;
+    const newClassName = '_' + className;
+
+    if (includes(convertedClassNames, className)) {
+      return;
+    }
+
+    convertedClassNames.push(newClassName);
+    convertedClassNames.push(className);
+
+    console.log('injected:', className)
+
+    funcDeclaration.id.name = newClassName;
+
+    path.replaceWith(
+      t.exportNamedDeclaration(
+        t.variableDeclaration(
+          'const',  // kind
+          [
+            funcDeclaration
+          ]
+        ),    // declaration
+        [],   // specifiers
+        null  // source (StringLiteral)
+      )
+    )
+
+    if (!importSet) {
+      path.insertBefore(
+        t.importDeclaration(
+          [
+            t.importSpecifier(
+              t.identifier('injectIntl'), // local
+              t.identifier('injectIntl') // imported
+            )
+          ],
+          t.stringLiteral('react-intl')
+        )
+      )
+
+      importSet = true;
+    }
+
+    path.insertAfter(
+      t.exportNamedDeclaration(
+        t.variableDeclaration(
+          'const',  // kind
+          [
+            t.variableDeclarator(
+              t.identifier(className),
+              t.callExpression(
+                t.identifier('injectIntl'),
+                [
+                  t.identifier(newClassName)
+                ]
+              )
+            )
+          ]
+        ),    // declaration
+        [],   // specifiers
+        null  // source (StringLiteral)
+      )
+    )
+  }
+
+  function getJSXAttributeById(path, id) {
+    const attributes = path.get('attributes');
+    const attribute = attributes.filter(attr => t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.node.name) && attr.node.name.name === id);
+
+    return attribute ? head(attribute) : null;
+  }
+
   return {
     visitor: {
       Program: {
@@ -216,16 +428,33 @@ export default function () {
           state.reactIntl = {
             messages: new Map(),
           };
+
+          const { opts } = state;
+          console.log('------- OPTS', opts)
+
+          importSet = false;
+          convertedClassNames = [];
         },
 
         exit(path, state) {
           const {file, opts, reactIntl} = state;
           const {basename, filename}    = file.opts;
 
+          //console.log('-------------------- STATE', state)
+
           let descriptors = [...reactIntl.messages.values()];
           file.metadata['react-intl'] = {messages: descriptors};
 
-          if (opts.messagesDir && descriptors.length > 0) {
+          console.log('----------------- descriptors.length', descriptors.length)
+          console.log('----------------- opts.messagesDir', opts.messagesDir)
+
+          if (!opts.messagesDir) {
+            return;
+          }
+
+          const messagesDir = opts.messagesDir || './build/messages/core/';
+
+          if (messagesDir && descriptors.length > 0) {
             // Make sure the relative path is "absolute" before
             // joining it with the `messagesDir`.
             let relativePath = p.join(
@@ -234,12 +463,35 @@ export default function () {
             );
 
             let messagesFilename = p.join(
-              opts.messagesDir,
+              messagesDir,
               p.dirname(relativePath),
               basename + '.json'
             );
 
-            let messagesFile = JSON.stringify(descriptors, null, 2);
+            const normalizedMessages = descriptors
+              .map(message => {
+                if (message.description == null) {
+                  delete message['description'];
+                }
+
+                return message;
+              })
+              .sort((a, b) => {
+                a = a.id.toLowerCase();
+                b = b.id.toLowerCase();
+
+                if (a > b) {
+                  return 1;
+                }
+                else if (a < b) {
+                  return -1;
+                }
+                else {
+                  return 0;
+                }
+              });
+
+            let messagesFile = JSON.stringify(normalizedMessages, null, 2);
 
             mkdirpSync(p.dirname(messagesFilename));
             writeFileSync(messagesFilename, messagesFile);
@@ -247,9 +499,28 @@ export default function () {
         },
       },
 
+      ImportDeclaration(path, state) {
+      },
+
+      ExportDeclaration(path, state) {
+        // @todo Implement!
+      },
+
+      ExportNamedDeclaration(path, state) {
+        const declaration = path.node.declaration
+
+        if (t.isClassDeclaration(declaration)) {
+          classType = CLASS_TYPES.CLASS;
+          processClassComponent(path, state);
+        } else if (t.isVariableDeclaration(declaration)) {
+          classType = CLASS_TYPES.STATELESS_FUNCTION;
+          processStatelessComponent(path, state);
+        }
+      },
+
       JSXOpeningElement(path, state) {
         const {file, opts}     = state;
-        const moduleSourceName = getModuleSourceName(opts);
+        const moduleSourceName = getModuleSourceName(opts, DEFAULT_REACT_INTL_SOURCE_NAME);
 
         let name = path.get('name');
 
@@ -264,29 +535,28 @@ export default function () {
         }
 
         if (referencesImport(name, moduleSourceName, COMPONENT_NAMES)) {
-          let attributes = path.get('attributes')
-            .filter((attr) => attr.isJSXAttribute());
+          let attributes = path.get('attributes');
 
-          let descriptor = createMessageDescriptor(
-            attributes.map((attr) => [
-              attr.get('name'),
-              attr.get('value'),
-            ]),
-            {isJSXSource: true}
-          );
+          const idAttribute = getJSXAttributeById(path, 'id')
+          const descriptionAttribute = getJSXAttributeById(path, 'description')
 
-          descriptor.defaultMessage = descriptor.id
-
-          // In order for a default message to be extracted when
-          // declaring a JSX element, it must be done with standard
-          // `key=value` attributes. But it's completely valid to
-          // write `<FormattedMessage {...descriptor} />`, because it
-          // will be skipped here and extracted elsewhere. When the
-          // `defaultMessage` prop exists, the descriptor will be
-          // checked.
-          if (descriptor.defaultMessage) {
-            storeMessage(descriptor, path, state);
+          if (!idAttribute) {
+            // Supported JSX tag without 'ID' attribute will be ignored.
+            return;
           }
+
+          path.node.attributes.push(
+            t.jSXAttribute(
+              t.jSXIdentifier('defaultMessage'),   // name
+              t.stringLiteral(idAttribute.node.value.value)   // value
+            )
+          )
+
+          const id = idAttribute.node.value.value
+          const description = descriptionAttribute ? descriptionAttribute.node.value.value : null;
+
+          // @todo Validate.
+          storeMessage({id, description}, path, state);
         }
       },
 
@@ -305,71 +575,51 @@ export default function () {
           }
         }
 
-        function processMessageObject(messageObj) {
-          assertObjectExpression(messageObj);
-
-          let properties = messageObj.get('properties');
-
-          let descriptor = createMessageDescriptor(
-            properties.map((prop) => [
-              prop.get('key'),
-              prop.get('value'),
-            ])
-          );
-
-          // this will allow us to skip 'defaultMessage' property.
-          descriptor.defaultMessage = descriptor.id;
-
-          if (!descriptor.defaultMessage) {
-            throw path.buildCodeFrameError(
-              '[React Intl] Message is missing a `defaultMessage`.'
-            );
-          }
-
-          storeMessage(descriptor, path, state);
-        }
-
-        function getPropertyValueByName(properties, name) {
-          const property = properties.filter(prop => prop.get('key').node.name === name)
-
-          return property[0] && property[0].get('value').node.value
-        }
-
-        //moduleSourceName = 'skybase-core/utils/translator'
-
         if (referencesImport(callee, moduleSourceName, FUNCTION_NAMES)) {
-          let messagesObj = path.get('arguments')[0];
+          const args = path.node.arguments
 
-          assertObjectExpression(messagesObj);
-
-          if (messagesObj.has('elements')) {
-            const elements = messagesObj.get('elements');
-            let resultObject = {};
-
-            elements.forEach(el => {
-              const properties = el.get('properties');
-              const id = getPropertyValueByName(properties, 'id');
-
-              if (!resultObject[id]) {
-                resultObject[id] = {};
-              }
-
-              properties.forEach(prop => {
-                const key = prop.get('key').node.name;
-                const value = prop.get('value').node.value;
-
-                resultObject[id][key] = value;
-              });
-            })
-
-            const stringified = JSON.stringify(resultObject)
-            path.replaceWithSourceString(`defineMessages(${stringified})`);
+          if (args.length < 2) {
+            path.node.arguments.push(
+              t.objectExpression([])
+            )
           }
-          else {
-            messagesObj.get('properties')
-              .map((prop) => prop.get('value'))
-              .forEach(processMessageObject);
+
+          if (args.length < 3) {
+            path.node.arguments.push(
+              t.nullLiteral()
+            )
           }
+
+          const thisProps = t.memberExpression(
+            t.thisExpression(),
+            t.identifier('props'),
+            false
+          )
+          if (args.length < 4) {
+            path.node.arguments.push(
+              classType == CLASS_TYPES.CLASS ? thisProps : t.identifier('props') // @todo Implement detection of props variable.
+            )
+          }
+
+          path.replaceWith(
+            t.callExpression(
+              t.memberExpression(
+                t.identifier('translate'),  // object
+                t.identifier('call'),      // property
+                false                       // computed
+              ), // callee
+              [
+                t.thisExpression()
+              ].concat(args)
+            )
+          )
+
+          const id = args[0].value
+          const description = !t.isNullLiteral(args[2]) ? args[2].value : null;
+
+          console.log('------ FOUND:', id);
+          // @todo Add validations.
+          storeMessage({id, description}, path, state);
         }
       },
     },
