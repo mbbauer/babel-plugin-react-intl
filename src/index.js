@@ -34,6 +34,8 @@ const CLASS_TYPES = {
 
 let classType = null;
 
+const developmentMode = process.env['NODE_ENV'] === 'development';
+
 export default function ({ types: t }) {
 
   function getModuleSourceName(opts, defaultSource = DEFAULT_MODULE_SOURCE_NAME) {
@@ -162,29 +164,29 @@ export default function ({ types: t }) {
     const className = declaration.id.name;
     const newClassName = '_' + className;
 
-    console.log('------ class:', className);
+    consoleLog('------ class:', className);
 
     const { superClass } = declaration;
     if (!superClass) {
-      console.log('------------ ignored:', 'Has no superclass.');
+      consoleLog('------------ ignored:', 'Has no superclass.');
       return;
     }
 
     // @todo Very naive implementation, handle also extends of React.Component
     if (t.isIdentifier(superClass) && superClass.name !== 'Component') {
-      console.log('------------ ignored:', 'Is not extending React.Component');
+      consoleLog('------------ ignored:', 'Is not extending React.Component');
       return;
     }
 
     // @todo Very naive implementation, handle also extends of React.Component
     if (t.isMemberExpression(superClass) && superClass.object.name != 'React' && superClass.property.name != 'Component') {
-      console.log('------------ ignored:', 'Is not extending React.Component');
+      consoleLog('------------ ignored:', 'Is not extending React.Component');
       return;
     }
 
     if (className === 'SbBaseComponent') {
       // @todo Implement!
-      console.log('------------ ignored:', 'Extends SbBaseComponent (not supported yet).');
+      consoleLog('------------ ignored:', 'Extends SbBaseComponent (not supported yet).');
       return;
     }
 
@@ -193,7 +195,7 @@ export default function ({ types: t }) {
     }
 
     convertedClassNames.push(newClassName);
-    console.log('injected:', className)
+    consoleLog('injected:', className)
 
     path.node.declaration.id.name = newClassName;
 
@@ -245,25 +247,25 @@ export default function ({ types: t }) {
     const { name } = declarations[0].id;
     const init = declarations[0].init;
 
-    console.log('------ class:', name);
+    consoleLog('------ class:', name);
 
     // If the first letter of function is capital, then we consider it as a react component.
     // First, check first letter of name is capital.
     if (name[0] !== name[0].toUpperCase()) {
-      console.log('------------ ignored:', 'Is not camelcase');
+      consoleLog('------------ ignored:', 'Is not camelcase');
       return false;
     }
 
     // then, init part must be an arrow function.
     if (!t.isArrowFunctionExpression(init)) {
-      console.log('------------ ignored:', 'Is not arrow function');
+      consoleLog('------------ ignored:', 'Is not arrow function');
       return false;
     }
 
     const { body } = init;
     // @todo support also JSX no-return (arrow) statement, .e.g. const x = () => (<p>hello</p>)
     if (!t.isBlockStatement(body)) {
-      console.log('------------ ignored:', 'has no block statement');
+      consoleLog('------------ ignored:', 'has no block statement');
       return;
     }
 
@@ -272,7 +274,7 @@ export default function ({ types: t }) {
 
     if (!t.isReturnStatement(lastStatement)) {
       // @todo Support more returns, e.g. if (1==1) { return (<p>X</p>) } else { return (<p>Y</p>) }
-      console.log('------------ ignored:', 'has no return statement at the end.');
+      consoleLog('------------ ignored:', 'has no return statement at the end.');
       return false;
     }
 
@@ -310,7 +312,7 @@ export default function ({ types: t }) {
       )
     );
 
-    console.log('injected:', className);
+    consoleLog('injected:', className);
 
     if (!importSet) {
       path.insertBefore(
@@ -355,6 +357,25 @@ export default function ({ types: t }) {
     const attribute = attributes.filter(attr => t.isJSXAttribute(attr) && t.isJSXIdentifier(attr.node.name) && attr.node.name.name === id);
 
     return attribute ? head(attribute) : null;
+  }
+
+  // @todo Implement some smart detection of props variable.
+  function detectPropVariable(path) {
+    const thisProps = t.memberExpression(
+      t.thisExpression(),
+      t.identifier('props'),
+      false
+    ); // result: this.props
+
+    return classType == CLASS_TYPES.CLASS ? thisProps : t.identifier('props');
+  }
+
+
+  function consoleLog(text) {
+    if (developmentMode) {
+      const args = Array.prototype.slice.call(arguments)
+      console.log.apply(this, args)
+    }
   }
 
   return {
@@ -508,15 +529,9 @@ export default function ({ types: t }) {
             );
           }
 
-          const thisProps = t.memberExpression(
-            t.thisExpression(),
-            t.identifier('props'),
-            false
-          ); // result: this.props
-
           if (args.length < 4) {
             path.node.arguments.push(
-              classType == CLASS_TYPES.CLASS ? thisProps : t.identifier('props') // @todo Implement some smart detection of props variable.
+              detectPropVariable(path)
             );
           }
 
@@ -536,7 +551,7 @@ export default function ({ types: t }) {
           const id = args[0].value;
           const description = !t.isNullLiteral(args[2]) ? args[2].value : null;
 
-          console.log('------ FOUND:', id);
+          consoleLog('------ FOUND:', id);
           // @todo Add validations.
           storeMessage({id, description}, path, state);
         }
