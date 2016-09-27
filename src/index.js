@@ -360,16 +360,15 @@ export default function ({ types: t }) {
   }
 
   // @todo Implement some smart detection of props variable.
-  function detectPropVariable(path) {
+  function getPropVariable(path) {
     const thisProps = t.memberExpression(
       t.thisExpression(),
-      t.identifier('props'),
+      t.identifier('props.intl.formatMessage'),
       false
     ); // result: this.props
 
-    return classType == CLASS_TYPES.CLASS ? thisProps : t.identifier('props');
+    return classType == CLASS_TYPES.CLASS ? thisProps : t.identifier('props.intl.formatMessage');
   }
-
 
   function consoleLog(text) {
     if (developmentMode) {
@@ -531,7 +530,7 @@ export default function ({ types: t }) {
 
           if (args.length < 4) {
             path.node.arguments.push(
-              detectPropVariable(path)
+              getPropVariable(path)
             );
           }
 
@@ -551,11 +550,12 @@ export default function ({ types: t }) {
           const id = args[0].value;
           const description = !t.isNullLiteral(args[2]) ? args[2].value : null;
 
-          consoleLog('------ FOUND:', id);
           // @todo Add validations.
-          storeMessage({id, description}, path, state);
+          if (id) {
+            storeMessage({id, description}, path, state);
+          }
         }
       },
     },
   };
-}
+};
